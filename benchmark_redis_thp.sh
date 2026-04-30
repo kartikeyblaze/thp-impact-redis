@@ -18,7 +18,9 @@ STRESS_CORES="2-5"    # Range of cores to be saturated by stress-ng (to isolate 
 THP_MODE=${1:-always} # THP mode to test: [always, madvise, never]. Defaults to 'always'.
 RESULT_FILE="results_${THP_MODE}.csv" # Output file for the benchmark metrics
 ITERATIONS=3          # Number of times to repeat the test for statistical relevance
-REQUESTS=1000000      # Total number of SET/GET requests per iteration
+REQUESTS=10000000     # Increased to 10M for 32GB system
+DATA_SIZE=1024        # 1KB payload size to increase memory pressure
+KEY_RANGE=10000000    # Ensure wide distribution to stress the TLB
 
 # --- Security Check ---
 # Root privileges are required to modify THP settings and access hardware performance counters.
@@ -116,8 +118,9 @@ for i in $(seq 1 $ITERATIONS); do
 
     # 5. Execute redis-benchmark
     # Pinned to BENCHMARK_CORE. Results are requested in CSV format for easier parsing.
+    # Using -d (data size), -r (key range), and -t set to maximize memory signal.
     echo "Running benchmark on core $BENCHMARK_CORE..."
-    BENCH_OUT=$(taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$REQUESTS" -t set,get --csv)
+    BENCH_OUT=$(taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" -t set --csv)
 
     # 6. Stop processes for current iteration
     # perf requires SIGINT to stop collecting and write the summary output.
