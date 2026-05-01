@@ -78,6 +78,7 @@ for i in $(seq 1 $ITERATIONS); do
         STRESS_PID=$!
     fi
 
+    rm -f dump.rdb
     taskset -c "$REDIS_CORE" redis-server --save "" --appendonly no --protected-mode no --port 6379 &
     REDIS_PID=$!
     sleep 2
