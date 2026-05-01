@@ -3,7 +3,7 @@
 # ==============================================================================
 # Redis Transparent Huge Pages (THP) SET-Only Benchmark Script
 # ------------------------------------------------------------------------------
-# Measures the "Anomalous" tradeoff of THP with AGGRESSIVE Promotion.
+# SAFETY UPDATE: Reduced stressors and corrected khugepaged filenames.
 # ==============================================================================
 
 # --- Configuration ---
@@ -36,10 +36,11 @@ ORIG_THP_DEFRAG=$(cat /sys/kernel/mm/transparent_hugepage/defrag | grep -o "\[.*
 ORIG_OVERCOMMIT_MEM=$(cat /proc/sys/vm/overcommit_memory)
 ORIG_OVERCOMMIT_RATIO=$(cat /proc/sys/vm/overcommit_ratio)
 
-# khugepaged tuning preservation
-ORIG_KHP_PAGES=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan)
-ORIG_KHP_SLEEP=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms)
-ORIG_KHP_ALLOC=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms)
+# Corrected filenames: _millisecs
+KHP_BASE="/sys/kernel/mm/transparent_hugepage/khugepaged"
+ORIG_KHP_PAGES=$(cat $KHP_BASE/pages_to_scan)
+ORIG_KHP_SLEEP=$(cat $KHP_BASE/scan_sleep_millisecs)
+ORIG_KHP_ALLOC=$(cat $KHP_BASE/alloc_sleep_millisecs)
 
 cleanup() {
     echo -e "\n--- Cleaning up and restoring system state ---"
@@ -52,10 +53,10 @@ cleanup() {
     echo "$ORIG_OVERCOMMIT_MEM" > /proc/sys/vm/overcommit_memory
     echo "$ORIG_OVERCOMMIT_RATIO" > /proc/sys/vm/overcommit_ratio
     
-    # Restore khugepaged
-    echo "$ORIG_KHP_PAGES" > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
-    echo "$ORIG_KHP_SLEEP" > /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms
-    echo "$ORIG_KHP_ALLOC" > /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms
+    # Restore khugepaged using correct filenames
+    echo "$ORIG_KHP_PAGES" > $KHP_BASE/pages_to_scan
+    echo "$ORIG_KHP_SLEEP" > $KHP_BASE/scan_sleep_millisecs
+    echo "$ORIG_KHP_ALLOC" > $KHP_BASE/alloc_sleep_millisecs
     
     wait "$STRESS_PID" "$REDIS_PID" 2>/dev/null
     echo "Done."
@@ -69,11 +70,11 @@ echo "$THP_MODE" > /sys/kernel/mm/transparent_hugepage/enabled
 echo "always" > /sys/kernel/mm/transparent_hugepage/defrag
 echo 1 > /proc/sys/vm/overcommit_memory
 
-# Boost khugepaged for the duration of the test
+# Boost khugepaged (Moderate safety boost)
 if [ "$THP_MODE" == "always" ]; then
-    echo 64000 > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
-    echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms
-    echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms
+    echo 4096 > $KHP_BASE/pages_to_scan
+    echo 100 > $KHP_BASE/scan_sleep_millisecs
+    echo 100 > $KHP_BASE/alloc_sleep_millisecs
 fi
 
 echo "iteration,thp_mode,stress_enabled,bgsave_enabled,throughput_rps,p99_latency_ms,dtlb_loads,dtlb_misses,itlb_loads,itlb_misses,page_faults,thp_fault_alloc,thp_fault_fallback" > "$RESULT_FILE"
@@ -88,8 +89,8 @@ for i in $(seq 1 $ITERATIONS); do
     sync
 
     if [ "$STRESS_TOGGLE" -eq 1 ]; then
-        echo "Starting stressors..."
-        stress-ng --cpu 8 --taskset "$STRESS_CORES" --cpu-load 100 --quiet &
+        echo "Starting stressors (Safety mode: 4 threads, 70% load)..."
+        stress-ng --cpu 4 --taskset "$STRESS_CORES" --cpu-load 70 --quiet &
         STRESS_PID=$!
     fi
 
@@ -103,7 +104,7 @@ for i in $(seq 1 $ITERATIONS); do
     taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$POP_REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" --sequential -t set -q
 
     # --- PHASE 2: MATURITY (Wait for promotion) ---
-    echo "Maturity Phase: Waiting $SETTLE_DELAY seconds for AGGRESSIVE THP promotion..."
+    echo "Maturity Phase: Waiting $SETTLE_DELAY seconds for THP promotion..."
     for s in $(seq 1 6); do
         sleep 10
         CURR_HUGE=$(grep "AnonHugePages" /proc/meminfo | awk '{print $2/1024}')
@@ -126,7 +127,7 @@ for i in $(seq 1 $ITERATIONS); do
 
     if [ "$BGSAVE_TOGGLE" -eq 1 ]; then
         sleep 10 
-        echo "Triggering BGSAVE (triggering THP Anomaly)..."
+        echo "Triggering BGSAVE..."
         redis-cli BGSAVE
     fi
 

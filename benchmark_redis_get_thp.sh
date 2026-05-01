@@ -3,7 +3,7 @@
 # ==============================================================================
 # Redis Transparent Huge Pages (THP) GET-Only Benchmark Script
 # ------------------------------------------------------------------------------
-# Measures the "Pure Benefit" of THP (reduced T_access) with AGGRESSIVE promotion.
+# SAFETY UPDATE: Corrected khugepaged filenames and reduced stressors.
 # ==============================================================================
 
 # --- Configuration ---
@@ -21,7 +21,7 @@ ITERATIONS=3
 REQUESTS=15000000
 DATA_SIZE=1024
 KEY_RANGE=10000000
-SETTLE_DELAY=60 # Seconds to wait for THP promotion
+SETTLE_DELAY=60 
 
 if [ "$EUID" -ne 0 ]; then
   echo "Error: This script must be run as root."
@@ -29,15 +29,17 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # --- Pre-Flight State Capture ---
+echo "Capturing current system state..."
 ORIG_THP_ENABLED=$(cat /sys/kernel/mm/transparent_hugepage/enabled | grep -o "\[.*\]" | tr -d '[]')
 ORIG_THP_DEFRAG=$(cat /sys/kernel/mm/transparent_hugepage/defrag | grep -o "\[.*\]" | tr -d '[]')
 ORIG_OVERCOMMIT_MEM=$(cat /proc/sys/vm/overcommit_memory)
 ORIG_OVERCOMMIT_RATIO=$(cat /proc/sys/vm/overcommit_ratio)
 
-# khugepaged tuning preservation
-ORIG_KHP_PAGES=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan)
-ORIG_KHP_SLEEP=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms)
-ORIG_KHP_ALLOC=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms)
+# Corrected filenames
+KHP_BASE="/sys/kernel/mm/transparent_hugepage/khugepaged"
+ORIG_KHP_PAGES=$(cat $KHP_BASE/pages_to_scan)
+ORIG_KHP_SLEEP=$(cat $KHP_BASE/scan_sleep_millisecs)
+ORIG_KHP_ALLOC=$(cat $KHP_BASE/alloc_sleep_millisecs)
 
 cleanup() {
     echo -e "\n--- Cleaning up and restoring system state ---"
@@ -50,10 +52,9 @@ cleanup() {
     echo "$ORIG_OVERCOMMIT_MEM" > /proc/sys/vm/overcommit_memory
     echo "$ORIG_OVERCOMMIT_RATIO" > /proc/sys/vm/overcommit_ratio
     
-    # Restore khugepaged
-    echo "$ORIG_KHP_PAGES" > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
-    echo "$ORIG_KHP_SLEEP" > /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms
-    echo "$ORIG_KHP_ALLOC" > /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms
+    echo "$ORIG_KHP_PAGES" > $KHP_BASE/pages_to_scan
+    echo "$ORIG_KHP_SLEEP" > $KHP_BASE/scan_sleep_millisecs
+    echo "$ORIG_KHP_ALLOC" > $KHP_BASE/alloc_sleep_millisecs
     
     wait "$STRESS_PID" "$REDIS_PID" 2>/dev/null
 }
@@ -66,11 +67,10 @@ echo "$THP_MODE" > /sys/kernel/mm/transparent_hugepage/enabled
 echo "always" > /sys/kernel/mm/transparent_hugepage/defrag
 echo 1 > /proc/sys/vm/overcommit_memory
 
-# Boost khugepaged for the duration of the test
 if [ "$THP_MODE" == "always" ]; then
-    echo 64000 > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
-    echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms
-    echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms
+    echo 4096 > $KHP_BASE/pages_to_scan
+    echo 100 > $KHP_BASE/scan_sleep_millisecs
+    echo 100 > $KHP_BASE/alloc_sleep_millisecs
 fi
 
 echo "iteration,thp_mode,stress_enabled,bgsave_enabled,throughput_rps,p99_latency_ms,dtlb_loads,dtlb_misses,itlb_loads,itlb_misses,page_faults,thp_fault_alloc,thp_fault_fallback" > "$RESULT_FILE"
@@ -85,13 +85,14 @@ for i in $(seq 1 $ITERATIONS); do
     sync
 
     if [ "$STRESS_TOGGLE" -eq 1 ]; then
-        stress-ng --cpu 8 --taskset "$STRESS_CORES" --cpu-load 100 --quiet &
+        echo "Starting stressors (Safety mode)..."
+        stress-ng --cpu 4 --taskset "$STRESS_CORES" --cpu-load 70 --quiet &
         STRESS_PID=$!
     fi
 
     rm -f dump.rdb
     taskset -c "$REDIS_CORE" redis-server --save "" --appendonly no --protected-mode no --port 6379 &
-    REDIS_PID!
+    REDIS_PID=$!
     sleep 2
 
     # --- PHASE 1: SEQUENTIAL POPULATION ---
@@ -99,7 +100,7 @@ for i in $(seq 1 $ITERATIONS); do
     taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$KEY_RANGE" -d "$DATA_SIZE" -r "$KEY_RANGE" --sequential -t set -q
 
     # --- PHASE 2: MATURITY (Wait for promotion) ---
-    echo "Maturity Phase: Waiting $SETTLE_DELAY seconds for AGGRESSIVE THP promotion..."
+    echo "Maturity Phase: Waiting $SETTLE_DELAY seconds for THP promotion..."
     for s in $(seq 1 6); do
         sleep 10
         CURR_HUGE=$(grep "AnonHugePages" /proc/meminfo | awk '{print $2/1024}')
@@ -114,7 +115,6 @@ for i in $(seq 1 $ITERATIONS); do
     perf stat -e dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,page-faults -p "$REDIS_PID" -o "$PERF_OUT" &
     PERF_PID=$!
 
-    # --- PHASE 3: MEASUREMENT PHASE (GET Only) ---
     echo "Running GET benchmark on core $BENCHMARK_CORE..."
     BENCH_RAW="bench_get_iter_${i}.raw"
     taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" -t get --csv > "$BENCH_RAW" &
