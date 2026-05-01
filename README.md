@@ -34,27 +34,32 @@ To ensure high-fidelity results on a multi-core system (designed for an AMD Ryze
 | :--- | :--- | :--- |
 | **Core 0** | `redis-server` | Primary application under test. |
 | **Core 1** | `redis-benchmark` | High-load client generator. |
-| **Cores 2-5** | `stress-ng` | Prevents OS background tasks from migrating to test cores. |
+| **Cores 2-5, 8-11** | `stress-ng` | Saturates remaining 4 physical cores (8 logical threads). |
+| **Cores 6, 7** | *IDLE* | Kept idle to prevent SMT contention with Redis/Benchmark. |
 
 ## 📖 Usage
 
-Run the script with the desired THP mode as an argument. The script will automatically capture the current system state, run the benchmark, and restore settings upon completion.
+Run the script with the desired THP mode, an optional stress toggle, and an optional BGSAVE toggle.
 
 ```bash
-# Test with THP Always Enabled
-sudo ./benchmark_redis_thp.sh always
+# Baseline: No THP, No Stress, No BGSAVE
+sudo ./benchmark_redis_thp.sh never 0 0
 
-# Test with THP Disabled
-sudo ./benchmark_redis_thp.sh never
+# The Anomaly: THP Always, No Stress, With BGSAVE
+sudo ./benchmark_redis_thp.sh always 0 1
 
-# Test with THP in Madvise mode
-sudo ./benchmark_redis_thp.sh madvise
+# Worst Case: THP Always, High Stress, With BGSAVE
+sudo ./benchmark_redis_thp.sh always 1 1
 ```
 
 ### Configuration
 You can adjust the following variables inside `benchmark_redis_thp.sh`:
 - `ITERATIONS`: Number of test runs (default: 3).
-- `REQUESTS`: Number of SET/GET operations (default: 1,000,000).
+- `REQUESTS`: Number of SET operations (default: 15,000,000).
+- `DATA_SIZE`: Size of each value in bytes (default: 1024 / 1KB).
+- `KEY_RANGE`: Range of keys for the benchmark (default: 10,000,000).
+- `STRESS_TOGGLE`: Second argument (default: 1).
+- `BGSAVE_TOGGLE`: Third argument (default: 0).
 
 ## 📊 Collected Metrics
 
