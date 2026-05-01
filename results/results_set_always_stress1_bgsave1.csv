@@ -1,0 +1,4 @@
+iteration,thp_mode,stress_enabled,bgsave_enabled,throughput_rps,p99_latency_ms,dtlb_loads,dtlb_misses,itlb_loads,itlb_misses,page_faults,thp_fault_alloc,thp_fault_fallback
+1,always,1,1,75620.47,2.975,8168598142,277838563,1661046484,79325653,3215486,255,0
+2,always,1,1,76312.96,3.007,8088353778,271747259,1658668986,50834199,3215660,240,0
+3,always,1,1,76702.41,2.799,7998752494,270811307,1690282156,14410287,3216485,20,0
