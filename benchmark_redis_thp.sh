@@ -12,15 +12,15 @@
 # ==============================================================================
 
 # --- Configuration ---
-REDIS_CORE=0          # Physical core dedicated to the Redis server process
-BENCHMARK_CORE=1      # Physical core dedicated to the redis-benchmark client
-STRESS_CORES="2-5"    # Range of cores to be saturated by stress-ng (to isolate 0 and 1)
+REDIS_CORE=0          # Physical Core 0 (Logical 0)
+BENCHMARK_CORE=1      # Physical Core 1 (Logical 1)
+STRESS_CORES="2-5,8-11" # Remaining 4 physical cores (8 logical threads)
 THP_MODE=${1:-always} # THP mode to test: [always, madvise, never]. Defaults to 'always'.
 RESULT_FILE="results_${THP_MODE}.csv" # Output file for the benchmark metrics
 ITERATIONS=3          # Number of times to repeat the test for statistical relevance
-REQUESTS=10000000     # Increased to 10M for 32GB system
+REQUESTS=15000000     # Increased to 15M for ~13-15GB RAM usage
 DATA_SIZE=1024        # 1KB payload size to increase memory pressure
-KEY_RANGE=10000000    # Ensure wide distribution to stress the TLB
+KEY_RANGE=10000000    # 10M keyspace
 
 # --- Security Check ---
 # Root privileges are required to modify THP settings and access hardware performance counters.
@@ -95,7 +95,7 @@ for i in $(seq 1 $ITERATIONS); do
     # 2. Start Stressors
     # Saturates non-target cores to isolate the Redis/Benchmark cores from background noise.
     echo "Starting stressors on cores $STRESS_CORES..."
-    stress-ng --cpu 4 --taskset "$STRESS_CORES" --cpu-load 100 --quiet &
+    stress-ng --cpu 8 --taskset "$STRESS_CORES" --cpu-load 100 --quiet &
     STRESS_PID=$!
 
     # 3. Start Redis Server
