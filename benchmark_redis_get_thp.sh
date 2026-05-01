@@ -3,10 +3,7 @@
 # ==============================================================================
 # Redis Transparent Huge Pages (THP) GET-Only Benchmark Script
 # ------------------------------------------------------------------------------
-# Measures the "Pure Benefit" of THP (reduced T_access) by:
-# 1. Sequential Population: Ensures 100% keyspace filling (~11.5 GB).
-# 2. Maturity Phase: Waits 60s for khugepaged to collapse 4KB pages into 2MB.
-# 3. Measurement Phase: Strictly read-only GET requests on "Mature" Huge Pages.
+# Measures the "Pure Benefit" of THP (reduced T_access) with AGGRESSIVE promotion.
 # ==============================================================================
 
 # --- Configuration ---
@@ -37,15 +34,27 @@ ORIG_THP_DEFRAG=$(cat /sys/kernel/mm/transparent_hugepage/defrag | grep -o "\[.*
 ORIG_OVERCOMMIT_MEM=$(cat /proc/sys/vm/overcommit_memory)
 ORIG_OVERCOMMIT_RATIO=$(cat /proc/sys/vm/overcommit_ratio)
 
+# khugepaged tuning preservation
+ORIG_KHP_PAGES=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan)
+ORIG_KHP_SLEEP=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms)
+ORIG_KHP_ALLOC=$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms)
+
 cleanup() {
     echo -e "\n--- Cleaning up and restoring system state ---"
     [ -n "$STRESS_PID" ] && kill "$STRESS_PID" 2>/dev/null
     [ -n "$REDIS_PID" ] && kill "$REDIS_PID" 2>/dev/null
     [ -n "$PERF_PID" ] && kill -INT "$PERF_PID" 2>/dev/null
+    
     echo "$ORIG_THP_ENABLED" > /sys/kernel/mm/transparent_hugepage/enabled
     echo "$ORIG_THP_DEFRAG" > /sys/kernel/mm/transparent_hugepage/defrag
     echo "$ORIG_OVERCOMMIT_MEM" > /proc/sys/vm/overcommit_memory
     echo "$ORIG_OVERCOMMIT_RATIO" > /proc/sys/vm/overcommit_ratio
+    
+    # Restore khugepaged
+    echo "$ORIG_KHP_PAGES" > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
+    echo "$ORIG_KHP_SLEEP" > /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms
+    echo "$ORIG_KHP_ALLOC" > /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms
+    
     wait "$STRESS_PID" "$REDIS_PID" 2>/dev/null
 }
 
@@ -56,6 +65,13 @@ echo "Starting GET benchmark: THP=$THP_MODE, Stress=$STRESS_TOGGLE, BGSAVE=$BGSA
 echo "$THP_MODE" > /sys/kernel/mm/transparent_hugepage/enabled
 echo "always" > /sys/kernel/mm/transparent_hugepage/defrag
 echo 1 > /proc/sys/vm/overcommit_memory
+
+# Boost khugepaged for the duration of the test
+if [ "$THP_MODE" == "always" ]; then
+    echo 64000 > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
+    echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_ms
+    echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/alloc_sleep_ms
+fi
 
 echo "iteration,thp_mode,stress_enabled,bgsave_enabled,throughput_rps,p99_latency_ms,dtlb_loads,dtlb_misses,itlb_loads,itlb_misses,page_faults,thp_fault_alloc,thp_fault_fallback" > "$RESULT_FILE"
 
@@ -75,7 +91,7 @@ for i in $(seq 1 $ITERATIONS); do
 
     rm -f dump.rdb
     taskset -c "$REDIS_CORE" redis-server --save "" --appendonly no --protected-mode no --port 6379 &
-    REDIS_PID=$!
+    REDIS_PID!
     sleep 2
 
     # --- PHASE 1: SEQUENTIAL POPULATION ---
@@ -83,7 +99,7 @@ for i in $(seq 1 $ITERATIONS); do
     taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$KEY_RANGE" -d "$DATA_SIZE" -r "$KEY_RANGE" --sequential -t set -q
 
     # --- PHASE 2: MATURITY (Wait for promotion) ---
-    echo "Maturity Phase: Waiting $SETTLE_DELAY seconds for THP promotion..."
+    echo "Maturity Phase: Waiting $SETTLE_DELAY seconds for AGGRESSIVE THP promotion..."
     for s in $(seq 1 6); do
         sleep 10
         CURR_HUGE=$(grep "AnonHugePages" /proc/meminfo | awk '{print $2/1024}')
