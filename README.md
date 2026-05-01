@@ -39,27 +39,26 @@ To ensure high-fidelity results on a multi-core system (designed for an AMD Ryze
 
 ## 📖 Usage
 
-Run the script with the desired THP mode, an optional stress toggle, and an optional BGSAVE toggle.
-
+### Write-Heavy Benchmark (SET Only)
+Measures the Copy-on-Write anomaly and allocation penalties.
 ```bash
-# Baseline: No THP, No Stress, No BGSAVE
-sudo ./benchmark_redis_thp.sh never 0 0
-
-# The Anomaly: THP Always, No Stress, With BGSAVE
+# Example: THP Always, No Stress, With BGSAVE
 sudo ./benchmark_redis_thp.sh always 0 1
+```
 
-# Worst Case: THP Always, High Stress, With BGSAVE
-sudo ./benchmark_redis_thp.sh always 1 1
+### Read-Only Benchmark (GET Only)
+Measures the pure benefit of reduced TLB misses.
+```bash
+# Example: THP Always, No Stress, No BGSAVE
+sudo ./benchmark_redis_get_thp.sh always 0 0
 ```
 
 ### Configuration
-You can adjust the following variables inside `benchmark_redis_thp.sh`:
+You can adjust variables inside both scripts:
 - `ITERATIONS`: Number of test runs (default: 3).
-- `REQUESTS`: Number of SET operations (default: 15,000,000).
-- `DATA_SIZE`: Size of each value in bytes (default: 1024 / 1KB).
-- `KEY_RANGE`: Range of keys for the benchmark (default: 10,000,000).
-- `STRESS_TOGGLE`: Second argument (default: 1).
-- `BGSAVE_TOGGLE`: Third argument (default: 0).
+- `REQUESTS`: Number of operations (default: 15,000,000).
+- `DATA_SIZE`: Size of each value (default: 1KB).
+- `KEY_RANGE`: Range of keys (default: 10M).
 
 ## 📊 Collected Metrics
 
