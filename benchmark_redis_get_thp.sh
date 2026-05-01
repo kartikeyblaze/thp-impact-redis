@@ -79,7 +79,7 @@ for i in $(seq 1 $ITERATIONS); do
     # --- POPULATION PHASE ---
     # We must fill the DB with data before we can measure GET performance.
     echo "Populating database with $KEY_RANGE keys..."
-    taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$KEY_RANGE" -d "$DATA_SIZE" -r "$KEY_RANGE" -t set --quiet
+    taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$KEY_RANGE" -d "$DATA_SIZE" -r "$KEY_RANGE" -t set -q
 
     INITIAL_THP=$(get_thp_stats)
     THP_ALLOC_START=$(echo $INITIAL_THP | cut -d' ' -f1)

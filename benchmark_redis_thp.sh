@@ -85,7 +85,7 @@ for i in $(seq 1 $ITERATIONS); do
     # --- PHASE 1: POPULATION ---
     # Fill the memory first so modifications in Phase 2 trigger CoW
     echo "Populating database ($POP_REQUESTS keys)..."
-    taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$POP_REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" -t set --quiet
+    taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$POP_REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" -t set -q
 
     INITIAL_THP=$(get_thp_stats)
     THP_ALLOC_START=$(echo $INITIAL_THP | cut -d' ' -f1)
