@@ -3,10 +3,10 @@
 # ==============================================================================
 # Redis Transparent Huge Pages (THP) GET-Only Benchmark Script
 # ------------------------------------------------------------------------------
-# This script measures the "Pure Benefit" of THP (reduced T_access) by:
-# 1. Populating the Redis instance with 10M keys first.
-# 2. Running a strictly GET-only benchmark to measure read-only performance.
-# 3. Maintaining strict physical core isolation and optional stressors.
+# Measures the "Pure Benefit" of THP (reduced T_access) by:
+# 1. Sequential Population: Ensures 100% keyspace filling (~11.5 GB).
+# 2. Maturity Phase: Waits 60s for khugepaged to collapse 4KB pages into 2MB.
+# 3. Measurement Phase: Strictly read-only GET requests on "Mature" Huge Pages.
 # ==============================================================================
 
 # --- Configuration ---
@@ -20,10 +20,11 @@ BGSAVE_TOGGLE=${3:-0}
 
 RESULT_FILE="results_get_${THP_MODE}_stress${STRESS_TOGGLE}_bgsave${BGSAVE_TOGGLE}.csv"
 
-ITERATIONS=5
+ITERATIONS=3
 REQUESTS=15000000
 DATA_SIZE=1024
 KEY_RANGE=10000000
+SETTLE_DELAY=60 # Seconds to wait for THP promotion
 
 if [ "$EUID" -ne 0 ]; then
   echo "Error: This script must be run as root."
@@ -77,10 +78,17 @@ for i in $(seq 1 $ITERATIONS); do
     REDIS_PID=$!
     sleep 2
 
-    # --- POPULATION PHASE ---
-    # We must fill the DB with data before we can measure GET performance.
-    echo "Populating database with $KEY_RANGE keys..."
-    taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$KEY_RANGE" -d "$DATA_SIZE" -r "$KEY_RANGE" -t set -q
+    # --- PHASE 1: SEQUENTIAL POPULATION ---
+    echo "Populating database sequentially ($KEY_RANGE keys)..."
+    taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$KEY_RANGE" -d "$DATA_SIZE" -r "$KEY_RANGE" --sequential -t set -q
+
+    # --- PHASE 2: MATURITY (Wait for promotion) ---
+    echo "Maturity Phase: Waiting $SETTLE_DELAY seconds for THP promotion..."
+    for s in $(seq 1 6); do
+        sleep 10
+        CURR_HUGE=$(grep "AnonHugePages" /proc/meminfo | awk '{print $2/1024}')
+        echo "   Current HugePages: ${CURR_HUGE} MB"
+    done
 
     INITIAL_THP=$(get_thp_stats)
     THP_ALLOC_START=$(echo $INITIAL_THP | cut -d' ' -f1)
@@ -90,7 +98,7 @@ for i in $(seq 1 $ITERATIONS); do
     perf stat -e dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,page-faults -p "$REDIS_PID" -o "$PERF_OUT" &
     PERF_PID=$!
 
-    # --- MEASUREMENT PHASE (GET Only) ---
+    # --- PHASE 3: MEASUREMENT PHASE (GET Only) ---
     echo "Running GET benchmark on core $BENCHMARK_CORE..."
     BENCH_RAW="bench_get_iter_${i}.raw"
     taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" -t get --csv > "$BENCH_RAW" &

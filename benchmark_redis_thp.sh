@@ -3,36 +3,38 @@
 # ==============================================================================
 # Redis Transparent Huge Pages (THP) SET-Only Benchmark Script
 # ------------------------------------------------------------------------------
-# Measures the impact of THP on Redis performance by:
-# 1. Populating the DB first to ensure a large Working Set Size (~9-11 GB).
-# 2. Measuring SET performance (modifications) to trigger CoW penalties.
-# 3. Triggering BGSAVE mid-benchmark to capture the "THP Anomaly".
+# Measures the "Anomalous" tradeoff of THP by:
+# 1. Sequential Population: Ensures 100% keyspace filling (~11.5 GB).
+# 2. Maturity Phase: Waits 60s for khugepaged to collapse 4KB pages into 2MB.
+# 3. Measurement Phase: Modifications trigger CoW on "Mature" Huge Pages.
+# 4. Delayed BGSAVE: Captures the 2MB CoW penalty at peak pressure.
 # ==============================================================================
 
 # --- Configuration ---
-REDIS_CORE=0          # Physical Core 0
-BENCHMARK_CORE=1      # Physical Core 1
-STRESS_CORES="2-5,8-11" # 8 logical threads for noise
+REDIS_CORE=0
+BENCHMARK_CORE=1
+STRESS_CORES="2-5,8-11"
 
-THP_MODE=${1:-always}  # THP mode: [always, madvise, never]
-STRESS_TOGGLE=${2:-1}  # 1 = Stress Enabled, 0 = Disabled
-BGSAVE_TOGGLE=${3:-0}  # 1 = BGSAVE Enabled, 0 = Disabled
+THP_MODE=${1:-always}
+STRESS_TOGGLE=${2:-1}
+BGSAVE_TOGGLE=${3:-0}
 
 RESULT_FILE="results_set_${THP_MODE}_stress${STRESS_TOGGLE}_bgsave${BGSAVE_TOGGLE}.csv"
 
 ITERATIONS=3          
-REQUESTS=15000000     # Measurement phase
-POP_REQUESTS=10000000 # Population phase
+REQUESTS=15000000     
+POP_REQUESTS=10000000 
 DATA_SIZE=1024        
 KEY_RANGE=10000000    
+SETTLE_DELAY=60      # Seconds to wait for THP promotion (Maturity Phase)
 
-# --- Security Check ---
 if [ "$EUID" -ne 0 ]; then
   echo "Error: This script must be run as root."
   exit 1
 fi
 
 # --- Pre-Flight State Capture ---
+echo "Capturing current system state..."
 ORIG_THP_ENABLED=$(cat /sys/kernel/mm/transparent_hugepage/enabled | grep -o "\[.*\]" | tr -d '[]')
 ORIG_THP_DEFRAG=$(cat /sys/kernel/mm/transparent_hugepage/defrag | grep -o "\[.*\]" | tr -d '[]')
 ORIG_OVERCOMMIT_MEM=$(cat /proc/sys/vm/overcommit_memory)
@@ -43,12 +45,10 @@ cleanup() {
     [ -n "$STRESS_PID" ] && kill "$STRESS_PID" 2>/dev/null
     [ -n "$REDIS_PID" ] && kill "$REDIS_PID" 2>/dev/null
     [ -n "$PERF_PID" ] && kill -INT "$PERF_PID" 2>/dev/null
-    
     echo "$ORIG_THP_ENABLED" > /sys/kernel/mm/transparent_hugepage/enabled
     echo "$ORIG_THP_DEFRAG" > /sys/kernel/mm/transparent_hugepage/defrag
     echo "$ORIG_OVERCOMMIT_MEM" > /proc/sys/vm/overcommit_memory
     echo "$ORIG_OVERCOMMIT_RATIO" > /proc/sys/vm/overcommit_ratio
-    
     wait "$STRESS_PID" "$REDIS_PID" 2>/dev/null
     echo "Done."
 }
@@ -83,28 +83,35 @@ for i in $(seq 1 $ITERATIONS); do
     REDIS_PID=$!
     sleep 2
 
-    # --- PHASE 1: POPULATION ---
-    # Fill the memory first so modifications in Phase 2 trigger CoW
-    echo "Populating database ($POP_REQUESTS keys)..."
-    taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$POP_REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" -t set -q
+    # --- PHASE 1: SEQUENTIAL POPULATION ---
+    echo "Populating database sequentially (100% fill)..."
+    taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$POP_REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" --sequential -t set -q
+
+    # --- PHASE 2: MATURITY (Wait for promotion) ---
+    echo "Maturity Phase: Waiting $SETTLE_DELAY seconds for THP promotion..."
+    for s in $(seq 1 6); do
+        sleep 10
+        CURR_HUGE=$(grep "AnonHugePages" /proc/meminfo | awk '{print $2/1024}')
+        echo "   Current HugePages: ${CURR_HUGE} MB"
+    done
 
     INITIAL_THP=$(get_thp_stats)
     THP_ALLOC_START=$(echo $INITIAL_THP | cut -d' ' -f1)
     THP_FALLBACK_START=$(echo $INITIAL_THP | cut -d' ' -f2)
 
-    # --- PHASE 2: MEASUREMENT ---
+    # --- PHASE 3: MEASUREMENT ---
     PERF_OUT="perf_set_iter_${i}.txt"
     perf stat -e dTLB-loads,dTLB-load-misses,iTLB-loads,iTLB-load-misses,page-faults -p "$REDIS_PID" -o "$PERF_OUT" &
     PERF_PID=$!
 
-    echo "Running measurement phase..."
+    echo "Running measurement phase (modifications)..."
     BENCH_RAW="bench_set_iter_${i}.raw"
     taskset -c "$BENCHMARK_CORE" redis-benchmark -n "$REQUESTS" -d "$DATA_SIZE" -r "$KEY_RANGE" -t set --csv > "$BENCH_RAW" &
     BENCH_PID=$!
 
     if [ "$BGSAVE_TOGGLE" -eq 1 ]; then
-        sleep 10 # Wait longer to ensure we are in a steady state of modifications
-        echo "Triggering BGSAVE (triggering THP Anomaly)..."
+        sleep 10 
+        echo "Triggering BGSAVE (Copy-on-Write anomaly)..."
         redis-cli BGSAVE
     fi
 
