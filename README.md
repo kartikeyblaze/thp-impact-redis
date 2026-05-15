@@ -34,7 +34,7 @@ To ensure high-fidelity results on a multi-core system (designed for an AMD Ryze
 | :--- | :--- | :--- |
 | **Core 0** | `redis-server` | Primary application under test. |
 | **Core 1** | `redis-benchmark` | High-load client generator. |
-| **Cores 2-5, 8-11** | `stress-ng` | Saturates remaining 4 physical cores (8 logical threads). |
+| **Cores 2-5, 8-11** | `stress-ng` | Saturates remaining 4 physical cores (8 logical threads) with tunable CPU or VM pressure. |
 | **Cores 6, 7** | *IDLE* | Kept idle to prevent SMT contention with Redis/Benchmark. |
 
 ## 📖 Usage
@@ -44,6 +44,9 @@ Measures the Copy-on-Write anomaly and allocation penalties.
 ```bash
 # Example: THP Always, No Stress, With BGSAVE
 sudo ./benchmark_redis_thp.sh always 0 1
+
+# Example: THP Always, VM fragmentation stress, With BGSAVE
+sudo ./benchmark_redis_thp.sh always 1 1 vm
 ```
 
 ### Read-Only Benchmark (GET Only)
@@ -59,6 +62,9 @@ You can adjust variables inside both scripts:
 - `REQUESTS`: Number of operations (default: 15,000,000).
 - `DATA_SIZE`: Size of each value (default: 1KB).
 - `KEY_RANGE`: Range of keys (default: 10M).
+- `STRESS_TYPE`: `vm` (default) for memory fragmentation or `cpu` for CPU-only contention.
+- `STRESS_VM_WORKERS`, `STRESS_VM_BYTES`, `STRESS_VM_METHOD`: Tune VM-based fragmentation pressure.
+- Default VM pressure is `4` workers at `2G` each, which is a safer starting point on a 32 GB host with a ~10.4 GB Redis dataset.
 
 ## 📊 Collected Metrics
 

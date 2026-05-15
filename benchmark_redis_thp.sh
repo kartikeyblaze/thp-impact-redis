@@ -3,7 +3,7 @@
 # ==============================================================================
 # Redis Transparent Huge Pages (THP) SET-Only Benchmark Script
 # ------------------------------------------------------------------------------
-# SAFETY UPDATE: Reduced stressors and corrected khugepaged filenames.
+# SAFETY UPDATE: Added tunable CPU/VM stressors and corrected khugepaged filenames.
 # ==============================================================================
 
 # --- Configuration ---
@@ -14,6 +14,16 @@ STRESS_CORES="2-5,8-11"
 THP_MODE=${1:-always}
 STRESS_TOGGLE=${2:-1}
 BGSAVE_TOGGLE=${3:-0}
+STRESS_TYPE=${4:-vm}
+
+# Memory-fragmentation stressor tuning.
+# Use env vars so you can change pressure without editing the script.
+STRESS_VM_WORKERS=${STRESS_VM_WORKERS:-4}
+STRESS_VM_BYTES=${STRESS_VM_BYTES:-2G}
+STRESS_VM_METHOD=${STRESS_VM_METHOD:-all}
+STRESS_VM_KEEP=${STRESS_VM_KEEP:-1}
+STRESS_CPU_WORKERS=${STRESS_CPU_WORKERS:-4}
+STRESS_CPU_LOAD=${STRESS_CPU_LOAD:-70}
 
 RESULT_FILE="results_set_${THP_MODE}_stress${STRESS_TOGGLE}_bgsave${BGSAVE_TOGGLE}.csv"
 
@@ -89,8 +99,17 @@ for i in $(seq 1 $ITERATIONS); do
     sync
 
     if [ "$STRESS_TOGGLE" -eq 1 ]; then
-        echo "Starting stressors (Safety mode: 4 threads, 70% load)..."
-        stress-ng --cpu 4 --taskset "$STRESS_CORES" --cpu-load 70 --quiet &
+        if [ "$STRESS_TYPE" = "vm" ]; then
+            echo "Starting memory-fragmentation stressors (vm=$STRESS_VM_WORKERS, bytes=$STRESS_VM_BYTES, method=$STRESS_VM_METHOD)..."
+            STRESS_CMD=(stress-ng --vm "$STRESS_VM_WORKERS" --vm-bytes "$STRESS_VM_BYTES" --vm-method "$STRESS_VM_METHOD" --taskset "$STRESS_CORES" --quiet)
+            if [ "$STRESS_VM_KEEP" -eq 1 ]; then
+                STRESS_CMD+=(--vm-keep)
+            fi
+            "${STRESS_CMD[@]}" &
+        else
+            echo "Starting CPU stressors (workers=$STRESS_CPU_WORKERS, load=$STRESS_CPU_LOAD)..."
+            stress-ng --cpu "$STRESS_CPU_WORKERS" --taskset "$STRESS_CORES" --cpu-load "$STRESS_CPU_LOAD" --quiet &
+        fi
         STRESS_PID=$!
     fi
 
